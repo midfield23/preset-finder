@@ -1,0 +1,30 @@
+{
+    "package_name": "Preset Finder",
+    "id": "com.johnm.preset_finder",
+    "title": "Preset Finder",
+    "version": "0.2.0",
+    "manufacturer": "John M",
+    "description": "Search every installed plugin's presets at once and load one with a click.",
+    "categories": [
+        "Mixing & Mastering",
+        "Workflow"
+    ],
+    "sdk_version": "3.1.2",
+    "min_luna_version": "3.1.2",
+    "engines": [
+        "luna"
+    ],
+    "html": "index.html",
+    "target": "window",
+    "floating": true,
+    "show_with_session": false,
+    "width": 760,
+    "height": 620,
+    "targets": [
+        "window",
+        "browser",
+        "editor"
+    ],
+    "min_width": 320,
+    "min_height": 260
+}
