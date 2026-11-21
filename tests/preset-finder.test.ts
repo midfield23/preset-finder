@@ -1,6 +1,6 @@
 // Runs against Luna.MockEngine: no LUNA needed. `npm test`.
 import { describe, expect, it } from 'vitest';
-import { loadPreset, planLoad } from '../src/loader';
+import { auditionAfter, loadPreset, planLoad, type Audition } from '../src/loader';
 import { addRecent, loadPrefs, toggleFavorite, type SimpleStorage } from '../src/prefs';
 import { isUA, loadCached, makerLabel, memoryStore, pluginsChanged, saveCached, scan, type PresetIndex } from '../src/presetIndex';
 import { categories, makers, NO_FILTERS, prepare, search } from '../src/search';
@@ -189,7 +189,7 @@ describe('loading', () => {
     const res = await loadPreset(session, bass, synth);
     expect(res).toMatchObject({ action: 'new-track', trackName: 'Fat Bass' });
     const vox = idx.presets.find((p) => p.uid === 'eq_vox')!;
-    const forced = await loadPreset(session, vox, idx.plugins[vox.p]!, { newTrack: true });
+    const forced = await loadPreset(session, vox, idx.plugins[vox.p]!, { mode: 'new-track' });
     expect(forced.action).toBe('new-track');
     await engine.settled();
     expect(edits(engine)).toEqual(['new_track', 'new_track']);
@@ -212,6 +212,86 @@ describe('loading', () => {
     expect(res).toMatchObject({ action: 'existing-slot', slot: 'instrument' });
     const drums = idx.presets.find((p) => p.uid === 'ad_kick')!;
     expect((await planLoad(session, idx.plugins[drums.p]!)).reason).toMatch(/already has an instrument/);
+  });
+});
+
+describe('auditioning in place', () => {
+  async function setup() {
+    const c = await connected();
+    const idx = await scan(c.luna);
+    const get = (uid: string) => {
+      const preset = idx.presets.find((p) => p.uid === uid)!;
+      return { preset, plugin: idx.plugins[preset.p]! };
+    };
+    const slot = (n: number) => `/sessions/abc/tracks/Vocal/effects/effect_${n}`;
+    const settle = async () => {
+      await c.engine.settled();
+      await c.luna.settled();
+    };
+    return { ...c, get, slot, settle };
+  }
+
+  it('swaps the slot it last loaded into, across plugins, one command each', async () => {
+    const { engine, session, get, slot, settle } = await setup();
+    let audition: Audition | undefined;
+    for (const uid of ['eq_vox', 'c_kick', 'eq_kick']) {
+      const { preset, plugin } = get(uid);
+      const res = await loadPreset(session, preset, plugin, { audition });
+      audition = auditionAfter(res, plugin);
+      await settle();
+      expect(res.slot).toBe('effect_0');
+    }
+    expect(engine.value(slot(0), 'plugin_id')).toBe(EQ);
+    expect(engine.value(slot(0), 'preset_uid')).toBe('eq_kick');
+    expect(engine.value(slot(1), 'plugin_id') ?? null).toBe(null);
+    expect(edits(engine)).toEqual(['set_inserts', 'set_inserts', 'set_inserts']);
+  });
+
+  it('with Shift adds to the next free insert instead', async () => {
+    const { engine, session, get, slot, settle } = await setup();
+    const a = get('eq_vox');
+    const res = await loadPreset(session, a.preset, a.plugin);
+    await settle();
+    const b = get('c_kick');
+    const added = await loadPreset(session, b.preset, b.plugin, { mode: 'add', audition: auditionAfter(res, a.plugin) });
+    await settle();
+    expect(added).toMatchObject({ action: 'free-slot', slot: 'effect_1' });
+    expect(engine.value(slot(0), 'plugin_id')).toBe(EQ);
+    expect(engine.value(slot(1), 'plugin_id')).toBe(COMP);
+  });
+
+  it('never swaps out a plugin the user changed since, but replaces a slot they pick', async () => {
+    const { engine, session, get, slot, settle } = await setup();
+    const a = get('eq_vox');
+    const res = await loadPreset(session, a.preset, a.plugin);
+    await settle();
+    // The user puts something else in that slot in LUNA.
+    await session.focusedTrack.value!.effects.byId('effect_0')!.setPlugin(COMP);
+    await settle();
+    const c = get('eq_kick');
+    const plan = await planLoad(session, c.plugin, { audition: auditionAfter(res, a.plugin) });
+    expect(plan).toMatchObject({ action: 'free-slot' });
+    expect(plan.slot?.id).toBe('effect_1');
+    const picked = await loadPreset(session, c.preset, c.plugin, { target: { trackId: 'Vocal', slotId: 'effect_0' } });
+    await settle();
+    expect(picked).toMatchObject({ action: 'replace', slot: 'effect_0' });
+    expect(engine.value(slot(0), 'plugin_id')).toBe(EQ);
+    expect(engine.value(slot(0), 'preset_uid')).toBe('eq_kick');
+  });
+
+  it('swaps instruments on the track it made for the last instrument preset', async () => {
+    const { engine, session, luna, get } = await setup();
+    const a = get('syn_bass');
+    const res = await loadPreset(session, a.preset, a.plugin);
+    expect(res.action).toBe('new-track');
+    await session.context.select({ trackUids: [res.trackId!] });
+    await engine.settled();
+    await luna.settled();
+    const b = get('ad_kick');
+    const swapped = await loadPreset(session, b.preset, b.plugin, { audition: auditionAfter(res, a.plugin) });
+    await engine.settled();
+    expect(swapped).toMatchObject({ action: 'replace', slot: 'instrument' });
+    expect(engine.value(`/sessions/abc/tracks/${res.trackId}/effects/instrument`, 'plugin_id')).toBe(DRUMS);
   });
 });
 

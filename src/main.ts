@@ -5,7 +5,7 @@
 // npm run build bundles this file and everything it imports into dist/main.js, one classic
 // script (an IIFE) that index.html loads after vendor/luna.global.js.
 
-import { describe, loadPreset, planLoad } from './loader';
+import { auditionAfter, describe, loadPreset, planLoad, slotLabel, slotsOf, type Audition, type LoadOptions, type SlotRef } from './loader';
 import { addRecent, loadPrefs, saveFilters, toggleFavorite, type Prefs } from './prefs';
 import { indexedDbStore, loadCached, pluginsChanged, saveCached, scan, type PluginEntry, type PresetEntry, type PresetIndex } from './presetIndex';
 import { COMP_LABELS, TYPE_LABELS, type CompType, type PluginType } from './types';
@@ -21,6 +21,7 @@ const qEl = $<HTMLInputElement>('q');
 const rescanEl = $<HTMLButtonElement>('rescan');
 const resultsEl = $('results');
 const whereEl = $('where');
+const intoEl = $<HTMLSelectElement>('into');
 const statusEl = $('status');
 const progressEl = $('progress').firstElementChild as HTMLElement;
 const makerEl = $<HTMLSelectElement>('maker');
@@ -168,19 +169,72 @@ async function startIndex(): Promise<void> {
 
 // ---- Session and target track ---------------------------------------------------------------
 
+/** The slot picked under "Load into", or 'new' for always a new track; undefined is Auto. */
+let target: SlotRef | 'new' | undefined;
+/** Where the last load went: plain clicks keep swapping that slot (audition in place). */
+let audition: Audition | undefined;
+let targetTrackId: string | undefined;
+
 async function bindSession(): Promise<void> {
   for (const off of sessionOffs) off();
   sessionOffs = [];
   session = luna?.sessions.current();
+  target = undefined;
+  audition = undefined;
   if (!session) {
     whereEl.textContent = 'Open a session in LUNA to load presets';
+    intoEl.hidden = true;
     return;
   }
   await session.ready();
-  const paint = (): void => void paintWhere();
+  const paint = (): void => {
+    void fillInto();
+    void paintWhere();
+  };
   sessionOffs.push(session.focusedTrack.onChange(paint));
   sessionOffs.push(session.tracks.onChange(paint));
   paint();
+}
+
+function pluginName(slot: Luna.Effect): string {
+  const id = slot.pluginId.value;
+  if (!id) return 'empty';
+  return index?.plugins.find((p) => p.id === id)?.name ?? slot.pluginName.value ?? id;
+}
+
+/** The "Load into" menu: Auto, each slot on the selected track, or a new track. */
+async function fillInto(): Promise<void> {
+  const track = session?.focusedTrack.value;
+  if (track?.id !== targetTrackId) {
+    // Another track: back to Auto.
+    targetTrackId = track?.id;
+    if (target !== 'new') target = undefined;
+  }
+  const opts: HTMLOptionElement[] = [new Option('Auto', ''), new Option('A new track', 'new')];
+  const type = track?.trackType.value;
+  if (track && (type === 'audio' || type === 'instrument')) {
+    try {
+      const slots = await slotsOf(track);
+      if (track.id !== session?.focusedTrack.value?.id) return;
+      const inst = slots.find((s) => s.id === 'instrument');
+      const list = [...(type === 'instrument' && inst ? [inst] : []), ...track.effectSlots];
+      opts.push(...list.map((s) => new Option(`${slotLabel(s.id).replace(/^the /, '').replace(/^./, (c) => c.toUpperCase())}: ${pluginName(s)}`, s.id)));
+    } catch {
+      /* the track went away */
+    }
+  }
+  const value = target === 'new' ? 'new' : (target?.slotId ?? '');
+  intoEl.replaceChildren(...opts);
+  intoEl.value = [...intoEl.options].some((o) => o.value === value) ? value : '';
+  if (intoEl.value !== value) target = undefined;
+  intoEl.hidden = false;
+  intoEl.classList.toggle('set', !!intoEl.value);
+}
+
+function loadOptions(mods: { alt?: boolean; shift?: boolean }): LoadOptions {
+  if (mods.alt || target === 'new') return { mode: 'new-track' };
+  if (mods.shift) return { mode: 'add' };
+  return { mode: 'auto', target: target === undefined ? undefined : target, audition };
 }
 
 let whereGen = 0;
@@ -190,26 +244,25 @@ async function paintWhere(): Promise<void> {
   if (!session) return;
   const track = session.focusedTrack.value;
   const hit = shown[active];
-  const base = (t: string): void => {
-    whereEl.innerHTML = '';
-    whereEl.append(t);
-  };
+  const keys = ' · <kbd>⇧</kbd> add to a free insert · <kbd>⌥</kbd> new track';
   if (!hit) {
     if (track) {
-      whereEl.innerHTML = 'Loads onto <b></b> · <kbd>⌥</kbd>-click for a new track';
+      whereEl.innerHTML = `Loads onto <b></b>${keys}`;
       whereEl.querySelector('b')!.textContent = track.name.value ?? track.id;
-    } else base('Loads onto a new track');
+    } else whereEl.textContent = 'Loads onto a new track';
     return;
   }
   try {
-    const plan = await planLoad(session, hit.plugin);
+    const plan = await planLoad(session, hit.plugin, loadOptions({}));
     if (gen !== whereGen) return;
-    const name = plan.track?.name.value ?? '';
-    const slot = plan.slot?.id === 'instrument' ? 'its instrument slot' : plan.slot ? `insert ${Number(plan.slot.id.replace('effect_', '')) + 1}` : '';
-    if (plan.action === 'existing-slot') whereEl.innerHTML = `<kbd>↵</kbd> loads onto the ${esc(hit.plugin.name)} on <b>${esc(name)}</b>`;
-    else if (plan.action === 'free-slot') whereEl.innerHTML = `<kbd>↵</kbd> inserts on <b>${esc(name)}</b>, ${esc(slot)}`;
-    else whereEl.innerHTML = `<kbd>↵</kbd> makes a new track${plan.reason ? ` (${esc(plan.reason)})` : ''}`;
-    whereEl.innerHTML += ' · <kbd>⌥</kbd> new track';
+    const name = esc(plan.track?.name.value ?? '');
+    const slot = plan.slot ? esc(slotLabel(plan.slot.id)) : '';
+    let text: string;
+    if (plan.action === 'existing-slot') text = `<kbd>↵</kbd> loads onto the ${esc(hit.plugin.name)} in ${slot} on <b>${name}</b>`;
+    else if (plan.action === 'replace') text = `<kbd>↵</kbd> swaps the ${esc(pluginName(plan.slot!))} in ${slot} on <b>${name}</b> for ${esc(hit.plugin.name)}`;
+    else if (plan.action === 'free-slot') text = `<kbd>↵</kbd> inserts on <b>${name}</b>, ${slot}`;
+    else text = `<kbd>↵</kbd> makes a new track${plan.reason ? ` (${esc(plan.reason)})` : ''}`;
+    whereEl.innerHTML = text + keys;
   } catch {
     /* the session went away mid-plan */
   }
@@ -217,17 +270,21 @@ async function paintWhere(): Promise<void> {
 
 // ---- Loading -------------------------------------------------------------------------------
 
-async function load(hit: Hit, newTrack: boolean): Promise<void> {
+async function load(hit: Hit, mods: { alt?: boolean; shift?: boolean }): Promise<void> {
   if (busy) return;
   if (!session) return say('Open a session in LUNA first', 'err');
   busy = true;
   resultsEl.classList.add('busy');
   say(`Loading ${hit.preset.name}…`, '', true);
   try {
-    const result = await loadPreset(session, hit.preset, hit.plugin, { newTrack });
+    const result = await loadPreset(session, hit.preset, hit.plugin, loadOptions(mods));
+    audition = auditionAfter(result, hit.plugin) ?? audition;
+    // A picked slot now holds this plugin: keep auditioning there.
+    if (target && target !== 'new' && result.slot && result.slot !== target.slotId) target = undefined;
     addRecent(storage, prefs, hit.preset.uid);
     say(describe(result, hit.preset, hit.plugin), 'ok');
     if (!qEl.value.trim()) render();
+    await fillInto();
     void paintWhere();
   } catch (e) {
     const err = e as { code?: string; message?: string };
@@ -238,6 +295,17 @@ async function load(hit: Hit, newTrack: boolean): Promise<void> {
     resultsEl.classList.remove('busy');
   }
 }
+
+intoEl.addEventListener('change', () => {
+  const v = intoEl.value;
+  const track = session?.focusedTrack.value;
+  target = v === 'new' ? 'new' : v && track ? { trackId: track.id, slotId: v } : undefined;
+  intoEl.classList.toggle('set', !!v);
+  void paintWhere();
+});
+// Slots change in LUNA too: refresh the menu as it is opened.
+intoEl.addEventListener('mousedown', () => void fillInto());
+intoEl.addEventListener('focus', () => void fillInto());
 
 // ---- Rendering -----------------------------------------------------------------------------
 
@@ -282,7 +350,7 @@ function rowEl(hit: Hit, ts: string[], withPlugin: boolean): HTMLElement {
   const row = document.createElement('div');
   row.className = 'row';
   row.dataset.i = String(i);
-  row.title = `${hit.preset.name} · ${hit.plugin.name}\nClick to load, ⌥-click for a new track`;
+  row.title = `${hit.preset.name} · ${hit.plugin.name}\nClick to load (swaps the slot you last loaded into), ⇧-click to add to a free insert, ⌥-click for a new track`;
   const fav = prefs.favorites.has(hit.preset.uid) || hit.preset.lunaFavorite;
   row.innerHTML =
     `<button class="star${fav ? ' on' : ''}" title="Favourite">${fav ? '★' : '☆'}</button>` +
@@ -479,7 +547,7 @@ resultsEl.addEventListener('click', (e) => {
   }
   active = Number(row.dataset.i);
   paintActive(false);
-  void load(hit, e.altKey);
+  void load(hit, { alt: e.altKey, shift: e.shiftKey });
 });
 
 document.addEventListener('keydown', (e) => {
@@ -493,7 +561,7 @@ document.addEventListener('keydown', (e) => {
     const hit = shown[active];
     if (!hit) return;
     e.preventDefault();
-    void load(hit, e.altKey);
+    void load(hit, { alt: e.altKey, shift: e.shiftKey });
   } else if (e.key === 'Escape' && inSearch && qEl.value) {
     e.preventDefault();
     qEl.value = '';

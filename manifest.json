@@ -2,7 +2,7 @@
     "package_name": "Preset Finder",
     "id": "com.johnm.preset_finder",
     "title": "Preset Finder",
-    "version": "0.2.2",
+    "version": "0.2.3",
     "manufacturer": "Tobacco Road Studios",
     "description": "Search every installed plugin's presets at once and load one with a click.",
     "categories": [

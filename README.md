@@ -34,15 +34,20 @@ Installing an update reads them again once.
 - **More filters**: UA or third-party, effects or instruments, favourites, maker, and LUNA's
   plugin category.
 - **Loading** goes to the most sensible place:
-  1. onto that plugin, if the selected track already has it;
-  2. into the next free insert (or the empty instrument slot of an instrument track);
-  3. otherwise onto a new track made from the preset.
+  1. the slot you last loaded into, so you can **audition in place**: click through presets,
+     even from different plugins, and each one swaps into that same slot;
+  2. onto that plugin, if the selected track already has it;
+  3. into the next free insert (or the empty instrument slot of an instrument track);
+  4. otherwise onto a new track made from the preset.
 
-  Hold **⌥ Option** while clicking to always make a new track. The line under the filters says
-  where the highlighted preset will go. Each load is one undo step.
+  **Load into** picks a slot yourself: choose an insert and every click replaces whatever is in
+  it. Hold **⇧ Shift** while clicking to add to the next free insert instead, or **⌥ Option** to
+  make a new track. The line under the filters says where the highlighted preset will go. Each
+  load, swap included, is one undo step. Preset Finder never swaps out a plugin you changed
+  yourself in LUNA unless you pick its slot.
 - **Favourites**: click the star. Presets starred in LUNA's own preset browser count too.
 - **Recently used** presets show when the search box is empty.
-- **Keys**: ↑ ↓ move, Return loads, ⌥Return loads onto a new track, Esc clears the search,
+- **Keys**: ↑ ↓ move, Return loads, ⇧Return adds to a free insert, ⌥Return loads onto a new track, Esc clears the search,
   `/` or ⌘F jumps to the search box.
 
 Presets you save after the first launch appear after you press **Rescan**. Newly installed
